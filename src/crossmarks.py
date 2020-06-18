@@ -1,10 +1,10 @@
 import sys
 import argparse
-from workflow import Workflow, web, ICON_WEB, ICON_WARNING
+from workflow import Workflow, web, ICON_WEB, ICON_WARNING, PasswordNotFound
 
 
 def get_all_bookmarks(username, password):
-    response = web.get('http://localhost:8080/api/bookmark', auth=(username, password))
+    response = web.get('http://localhost:8080/api/bookmark', auth=(username, password), params=dict())
     response.raise_for_status()
     return response.json()
 
@@ -20,21 +20,28 @@ def search_key_for_bookmark(bookmark):
 def main(wf):
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--user', dest='username', nargs=1, default=None)
-    parser.add_argument('--pass', dest='password', nargs=1, default=None)
+    parser.add_argument('--user', dest='username', default=None)
+    parser.add_argument('--pass', dest='password', default=None)
     parser.add_argument('query', nargs='?', default=None)
 
     args = parser.parse_args(wf.args)
 
     if args.username and args.password:
         wf.settings['username'] = args.username
-        wf.settings['password'] = args.password
+        wf.save_password('crossmarks_password', args.password)
         return 0
 
-    username = wf.settings['username']
-    password = wf.settings['password']
+    username = wf.settings.get("username")
 
-    print username
+    try:
+        password = wf.get_password("crossmarks_password")
+    except PasswordNotFound:
+        wf.add_item('No password set.',
+                    'Please use cmlogin to store your credentials.',
+                    valid=False,
+                    icon=ICON_WARNING)
+        wf.send_feedback()
+        return 0
 
     if not (username and password):
         wf.add_item('Credentials missing!',
@@ -47,12 +54,17 @@ def main(wf):
     query = args.query
 
     def wrapper():
-        return get_all_bookmarks(username.encode('utf-8'), password.encode('utf-8'))
+        return get_all_bookmarks(username, password)
 
     bookmarks_json = wf.cached_data('bookmarks_json', wrapper, max_age=60)
 
     if query:
         bookmarks_json = wf.filter(query, bookmarks_json, key=search_key_for_bookmark, min_score=20)
+
+    if not bookmarks_json:  # we have no data to show, so show a warning and stop
+        wf.add_item('No bookmarks found', icon=ICON_WARNING)
+        wf.send_feedback()
+        return 0
 
     for bookmark_json in bookmarks_json:
         wf.add_item(title=bookmark_json['name'],
